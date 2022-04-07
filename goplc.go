@@ -4,6 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"math"
+	"math/rand"
+	"net"
+	"time"
+
 	"github.com/MiguelValentine/goplc/ethernetip"
 	"github.com/MiguelValentine/goplc/ethernetip/commonIndustrialProtocol"
 	"github.com/MiguelValentine/goplc/ethernetip/commonIndustrialProtocol/segment"
@@ -12,12 +19,6 @@ import (
 	"github.com/MiguelValentine/goplc/lib"
 	"github.com/MiguelValentine/goplc/tag"
 	"github.com/MiguelValentine/goplc/tagGroup"
-	"io"
-	"log"
-	"math"
-	"math/rand"
-	"net"
-	"time"
 )
 
 type controller struct {
@@ -32,7 +33,7 @@ type controller struct {
 	Name         string
 }
 
-type plc struct {
+type PLC struct {
 	tcpAddr    *net.TCPAddr
 	tcpConn    *net.TCPConn
 	config     *Config
@@ -49,7 +50,7 @@ type plc struct {
 	ContextPool map[_type.ULINT]func(*commonIndustrialProtocol.MessageRouterResponse)
 }
 
-func (p *plc) Connect() error {
+func (p *PLC) Connect() error {
 	p.config.Println("PLC Connecting...")
 	_conn, err := net.DialTCP("tcp", nil, p.tcpAddr)
 	if err != nil {
@@ -66,7 +67,7 @@ func (p *plc) Connect() error {
 	return nil
 }
 
-func (p *plc) connected() {
+func (p *PLC) connected() {
 	p.config.Println("PLC Connected!")
 	p.bufferData = []byte{}
 
@@ -82,7 +83,7 @@ func (p *plc) connected() {
 	p.sender <- encapsulation.Buffer()
 }
 
-func (p *plc) disconnected(err error) {
+func (p *PLC) disconnected(err error) {
 	if err == io.EOF {
 		p.config.Println("PLC Disconnected!")
 		p.config.Println("EOF")
@@ -104,7 +105,7 @@ func (p *plc) disconnected(err error) {
 	}
 }
 
-func (p *plc) read() {
+func (p *PLC) read() {
 	defer func() {
 		if err := recover(); err != nil {
 			go p.disconnected(err.(error))
@@ -139,7 +140,7 @@ func (p *plc) read() {
 	}
 }
 
-func (p *plc) handleRegisterSession(encapsulation *ethernetip.Encapsulation) {
+func (p *PLC) handleRegisterSession(encapsulation *ethernetip.Encapsulation) {
 	p.session = encapsulation.SessionHandle
 	p.config.Printf("Session => %#x\n", p.session)
 
@@ -155,7 +156,7 @@ func (p *plc) handleRegisterSession(encapsulation *ethernetip.Encapsulation) {
 	p.ContextPool[math.MaxUint64] = p.getAttributeAll
 }
 
-func (p *plc) getAttributeAll(mr *commonIndustrialProtocol.MessageRouterResponse) {
+func (p *PLC) getAttributeAll(mr *commonIndustrialProtocol.MessageRouterResponse) {
 	p.config.Printf("%+v\n", mr)
 
 	dataReader := bytes.NewReader(mr.ResponseData)
@@ -179,7 +180,7 @@ func (p *plc) getAttributeAll(mr *commonIndustrialProtocol.MessageRouterResponse
 	}
 }
 
-func (p *plc) UcmmSend(timeTicks _type.USINT, timeoutTicks _type.USINT, context _type.ULINT, mr1 *commonIndustrialProtocol.MessageRouterRequest) {
+func (p *PLC) UcmmSend(timeTicks _type.USINT, timeoutTicks _type.USINT, context _type.ULINT, mr1 *commonIndustrialProtocol.MessageRouterRequest) {
 	ucmm := &commonIndustrialProtocol.UnconnectedSend{}
 	ucmm.TimeTick = timeTicks
 	ucmm.TimeOutTicks = timeoutTicks
@@ -201,7 +202,7 @@ func (p *plc) UcmmSend(timeTicks _type.USINT, timeoutTicks _type.USINT, context 
 	p.sender <- pkg.Buffer()
 }
 
-func (p *plc) handleSendData(encapsulation *ethernetip.Encapsulation) {
+func (p *PLC) handleSendData(encapsulation *ethernetip.Encapsulation) {
 	cpf := ethernetip.SendRRDataParser(encapsulation.Data)
 	mr := commonIndustrialProtocol.MRParser(cpf.DataItem.Data)
 	if mr.GeneralStatus != 0 {
@@ -212,7 +213,7 @@ func (p *plc) handleSendData(encapsulation *ethernetip.Encapsulation) {
 	}
 }
 
-func (p *plc) write() {
+func (p *PLC) write() {
 	p.writeRoute = true
 	for {
 		select {
@@ -223,7 +224,7 @@ func (p *plc) write() {
 	}
 }
 
-func (p *plc) ReadTag(tag *tag.Tag) *tag.Tag {
+func (p *PLC) ReadTag(tag *tag.Tag) *tag.Tag {
 	rand.Seed(time.Now().UnixNano())
 	context := _type.ULINT(rand.Uint64())
 	p.ContextPool[context] = tag.ReadTagParser
@@ -231,7 +232,7 @@ func (p *plc) ReadTag(tag *tag.Tag) *tag.Tag {
 	return tag
 }
 
-func (p *plc) WriteTag(tag *tag.Tag) *tag.Tag {
+func (p *PLC) WriteTag(tag *tag.Tag) *tag.Tag {
 	rand.Seed(time.Now().UnixNano())
 	context := _type.ULINT(rand.Uint64())
 	p.ContextPool[context] = tag.WriteTagParser
@@ -239,14 +240,14 @@ func (p *plc) WriteTag(tag *tag.Tag) *tag.Tag {
 	return tag
 }
 
-func (p *plc) ReadTagGroup(tg *tagGroup.TagGroup) {
+func (p *PLC) ReadTagGroup(tg *tagGroup.TagGroup) {
 	rand.Seed(time.Now().UnixNano())
 	context := _type.ULINT(rand.Uint64())
 	p.ContextPool[context] = tg.ReadTagParser
 	p.UcmmSend(3, 250, context, tg.GenerateReadMessageRequest())
 }
 
-func (p *plc) ReadTagGroupInterval(tg *tagGroup.TagGroup, d time.Duration) {
+func (p *PLC) ReadTagGroupInterval(tg *tagGroup.TagGroup, d time.Duration) {
 	lib.Cron(d, func() {
 		p.ReadTagGroup(tg)
 	})
@@ -254,7 +255,7 @@ func (p *plc) ReadTagGroupInterval(tg *tagGroup.TagGroup, d time.Duration) {
 
 const ServiceGetAttributeList = commonIndustrialProtocol.Service(0x03)
 
-func (p *plc) ListTemplate(instanceID uint32) {
+func (p *PLC) ListTemplate(instanceID uint32) {
 	mr := &commonIndustrialProtocol.MessageRouterRequest{}
 	mr.Service = ServiceGetAttributeList
 	mr.RequestPath = segment.Paths(
@@ -280,7 +281,7 @@ func (p *plc) ListTemplate(instanceID uint32) {
 
 const ServiceGetInstanceAttributeList = commonIndustrialProtocol.Service(0x55)
 
-func (p *plc) ListAllTags(instanceID uint32) {
+func (p *PLC) ListAllTags(instanceID uint32) {
 	mr := &commonIndustrialProtocol.MessageRouterRequest{}
 	mr.Service = ServiceGetInstanceAttributeList
 	mr.RequestPath = segment.Paths(
@@ -317,8 +318,8 @@ func (p *plc) ListAllTags(instanceID uint32) {
 	p.UcmmSend(3, 250, context, mr)
 }
 
-func NewOriginator(addr string, slot uint8, cfg *Config) (*plc, error) {
-	_plc := &plc{}
+func NewOriginator(addr string, slot uint8, cfg *Config) (*PLC, error) {
+	_plc := &PLC{}
 	_plc.config = cfg
 	_plc.config = cfg
 	if _plc.config == nil {
